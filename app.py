@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from flask import Flask, request, jsonify
-from binance.cm_futures import CMFutures as Client
+from binance.um_futures import UMFutures as Client
 import threading
 import time
 import requests
@@ -9,6 +9,8 @@ from datetime import datetime
 import json
 import logging
 from logging.handlers import RotatingFileHandler
+from binance.um_futures import UMFutures as Client
+from binance.error import ClientError
 
 app = Flask(__name__)
 
@@ -49,6 +51,7 @@ class GridTrader:
         self.is_monitoring = False  # 添加监控状态标志
         self.monitor_thread = None  # 添加监控线程对象
         self.stop_loss_order_id = None  # 添加止损单ID
+        self.side = ""
         
         logger.info(f'{symbol} GridTrader 初始化完成')
         
@@ -73,18 +76,46 @@ class GridTrader:
         # 设置初始止损价格
         self.stop_loss_price = self.grids[0]['lower'] + (self.grids[0]['upper'] - self.grids[0]['lower']) * float(data['sl'])/100
         # 获取持仓数量
-        # TODO: 从Binance获取当前持仓数量，这里暂时用示例值
-        total_position = 1000  # 示例值
-        self.position_qty = total_position * float(data['qty_percent'])/100
+        try:
+            response = client.get_account_trades(symbol=self.symbol, recvWindow=6000)
+            logger.info(response)
+        except ClientError as error:
+            logger.error(
+                "Found error. status: {}, error code: {}, error message: {}".format(
+                    error.status_code, error.error_code, error.error_message
+                    )
+                )
+        # 从Binance获取当前持仓数量，这里暂时用示例值
+        if response['code'] == 0 and len(response['data']) > 0:
+            total_position = response['data'][0]['qty']
+            self.position_qty = total_position * float(data['qty_percent'])/100
+            self.side = response['data'][0]['side']
         
         logger.info(f'网格设置完成，初始止损价格: {self.stop_loss_price}')
 
     def place_stop_loss_order(self, price):
         """下止损单"""
         logger.info(f'下止损单，价格: {price}, 数量: {self.position_qty}')
-        # TODO: 调用Binance API下止损单
-        # TODO: 记录止损单ID
-        self.stop_loss_order_id = "止损单ID"
+        # 调用Binance API下止损单
+        # 记录止损单ID
+        try:
+            response = client.new_order(
+                symbol=self.symbol,
+                side="SELL" if self.side == "BUY" else "BUY",
+                type="LIMIT",
+                quantity=self.position_qty,
+                timeInForce="GTC",
+                price=price,
+            )
+            logger.info(response)
+        except ClientError as error:
+            logger.error(
+                "Found error. status: {}, error code: {}, error message: {}".format(
+                    error.status_code, error.error_code, error.error_message
+                )
+            )
+        if response['code'] == 0:
+            self.stop_loss_order_id = response['data']['orderId']
 
     def update_stop_loss(self, current_price):
         """更新止损价格"""

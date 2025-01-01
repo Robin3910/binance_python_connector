@@ -172,7 +172,7 @@ class GridTrader:
 
     def update_stop_loss(self, current_price):
         """更新止损价格"""
-        logger.info(f'核查是否要更新止损价格，{self.symbol}当前价格: {current_price}')
+        # logger.info(f'核查是否要更新止损价格，{self.symbol}当前价格: {current_price}')
         
         for i, grid in enumerate(self.grids):
             # 当价格突破网格上限时

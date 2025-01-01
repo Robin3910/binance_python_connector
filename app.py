@@ -37,11 +37,6 @@ def prefix_symbol(s: str) -> str:
     if s.endswith('.P'):
         s = s[:-2]
     
-    # 将 BTCUSDT 格式转换为 BTC-USDT-SWAP 格式
-    if 'USDT' in s:
-        base = s.replace('USDT', '')
-        return f"{base}-USDT-SWAP"
-    
     return s
 
 def send_wx_notification(title, message):

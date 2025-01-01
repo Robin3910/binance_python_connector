@@ -18,6 +18,8 @@ app = Flask(__name__)
 # 配置信息
 WX_TOKEN = WX_CONFIG['token']
 
+ip_white_list = BINANCE_CONFIG['ip_white_list']
+
 client = Client(
     BINANCE_CONFIG['key'], 
     BINANCE_CONFIG['secret'], 
@@ -350,7 +352,15 @@ def send_wx_message():
 
 
 
-
+@app.before_request
+def before_req():
+    logger.info(request.json)
+    if request.json is None:
+        return jsonify({'error': '请求体不能为空'}), 400
+    if request.remote_addr not in ip_white_list:
+        logger.info(f'ipWhiteList: {ip_white_list}')
+        logger.info(f'ip is not in ipWhiteList: {request.remote_addr}')
+        return jsonify({'error': 'ip is not in ipWhiteList'}), 403
 
 
 if __name__ == '__main__':
@@ -360,4 +370,4 @@ if __name__ == '__main__':
     message_thread.start()
     
     # 启动Flask服务
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=80)

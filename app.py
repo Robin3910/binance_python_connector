@@ -26,6 +26,24 @@ client = Client(
     base_url=BINANCE_CONFIG['base_url']
 )
 
+
+def prefix_symbol(s: str) -> str:
+    # BINANCE:BTCUSDT.P -> BTC-USDT-SWAP
+    # 首先处理冒号，如果存在则取后面的部分
+    if ':' in s:
+        s = s.split(':')[1]
+    
+    # 检查字符串是否以".P"结尾并移除
+    if s.endswith('.P'):
+        s = s[:-2]
+    
+    # 将 BTCUSDT 格式转换为 BTC-USDT-SWAP 格式
+    if 'USDT' in s:
+        base = s.replace('USDT', '')
+        return f"{base}-USDT-SWAP"
+    
+    return s
+
 def send_wx_notification(title, message):
     """
     发送微信通知
@@ -86,7 +104,7 @@ trading_pairs = {}
 
 class GridTrader:
     def __init__(self, symbol):
-        self.symbol = symbol
+        self.symbol = prefix_symbol(symbol)
         self.current_grid = 0
         self.grids = []
         self.stop_loss_price = 0

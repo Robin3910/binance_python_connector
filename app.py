@@ -11,17 +11,18 @@ import logging
 from logging.handlers import RotatingFileHandler
 from binance.um_futures import UMFutures as Client
 from binance.error import ClientError
+from config import BINANCE_CONFIG, WX_CONFIG
 
 app = Flask(__name__)
 
 # 配置信息
-WX_TOKEN = "8nEhpKFjhU9uKaDDnfDseWy1P"
+WX_TOKEN = WX_CONFIG['token']
 
-key = "6953af36dcec691ee0cb266cf60d13e58bcc3f9c8f9d71b8b899090e649e3898"
-secret = "2e9d0e67d0585312bbefc7aa7e4dcbdb1d2991b8b7665a76c4c11b022bc88f91"
-BASE_URL = "https://fapi.binance.com"
-TEST_BASE_URL = "https://testnet.binancefuture.com"
-client = Client(key, secret, base_url=TEST_BASE_URL)
+client = Client(
+    BINANCE_CONFIG['key'], 
+    BINANCE_CONFIG['secret'], 
+    base_url=BINANCE_CONFIG['base_url']
+)
 
 def send_wx_notification(title, message):
     """

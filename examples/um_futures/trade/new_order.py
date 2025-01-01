@@ -15,12 +15,13 @@ um_futures_client = UMFutures(key=key, secret=secret, **{'base_url': test_url})
 try:
     response = um_futures_client.new_order(
         symbol="BTCUSDT",
-        side="BUY",
-        type="LIMIT",
+        side="SELL",
+        type="STOP",
         quantity=0.01,
         timeInForce="GTC",
         price=92692.2,
-    )
+        stopPrice=92692.2,
+        )
     logging.info(response)
 except ClientError as error:
     logging.error(

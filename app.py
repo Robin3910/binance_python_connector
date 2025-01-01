@@ -5,7 +5,7 @@ from binance.um_futures import UMFutures as Client
 import threading
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -15,12 +15,37 @@ from binance.error import ClientError
 app = Flask(__name__)
 
 # 配置信息
-key = ""
-secret = ""
+WX_TOKEN = "8nEhpKFjhU9uKaDDnfDseWy1P"
+
+key = "6953af36dcec691ee0cb266cf60d13e58bcc3f9c8f9d71b8b899090e649e3898"
+secret = "2e9d0e67d0585312bbefc7aa7e4dcbdb1d2991b8b7665a76c4c11b022bc88f91"
 BASE_URL = "https://fapi.binance.com"
 TEST_BASE_URL = "https://testnet.binancefuture.com"
-WX_TOKEN = "您的token"
 client = Client(key, secret, base_url=TEST_BASE_URL)
+
+def send_wx_notification(title, message):
+    """
+    发送微信通知
+    
+    Args:
+        title: 通知标题
+        message: 通知内容
+    """
+    try:
+        mydata = {
+            'text': title,
+            'desp': message
+        }
+        requests.post(f'https://wx.xtuis.cn/{WX_TOKEN}.send', data=mydata)
+        logger.info('发送微信消息成功')
+    except Exception as e:
+        logger.error(f'发送微信消息失败: {str(e)}')
+
+def get_decimal_places(tick_size):
+    tick_str = str(float(tick_size))
+    if '.' in tick_str:
+        return len(tick_str.split('.')[-1].rstrip('0'))
+    return 0
 
 # 配置日志
 def setup_logger():
@@ -36,6 +61,22 @@ def setup_logger():
     return logger
 
 logger = setup_logger()
+
+# 获取币种的精度
+try:
+    exchange_info = client.exchange_info()['symbols']
+    symbol_tick_size = {}
+    for item in exchange_info:
+        symbol_tick_size[item['symbol']] = {
+            'tick_size': get_decimal_places(item['filters'][0]['tickSize']),
+            'min_qty': get_decimal_places(item['filters'][1]['minQty']),
+        }
+except ClientError as error:
+    logger.error(
+        "Found error. status: {}, error code: {}, error message: {}".format(
+            error.status_code, error.error_code, error.error_message
+        )
+    )
 
 # 创建全局字典来存储不同币种的交易信息
 trading_pairs = {}
@@ -57,40 +98,42 @@ class GridTrader:
         
     def set_trading_params(self, data):
         logger.info(f'设置交易参数: {json.dumps(data, ensure_ascii=False)}')
-        self.initial_price = float(data['price'])
-        grid_sizes = [float(x) for x in data['grid'].split('|')]
+        self.initial_price = float(data['price']) # 当前价格
+        grid_sizes = [float(x) for x in data['grid'].split('|')] # 网格大小
         
         # 构建网格
         self.grids = []
         current_price = self.initial_price
         for size in grid_sizes:
             self.grids.append({
-                'lower': current_price - size / 2,
-                'upper': current_price + size / 2,
-                'tp_price': current_price + size * float(data['tp'])/100,
-                'sl_price': current_price - size * float(data['sl'])/100,
-                'activated': False
+                'lower': round(current_price - size / 2, symbol_tick_size[self.symbol]['tick_size']),
+                'upper': round(current_price + size / 2, symbol_tick_size[self.symbol]['tick_size']),
+                'tp_price': round((current_price - size / 2) + (size * float(data['tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                'sl_price': round((current_price - size / 2) + (size * float(data['sl'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                'activated': False,
+                'size': size
             })
             current_price += size
             
         # 设置初始止损价格
-        self.stop_loss_price = self.grids[0]['lower'] + (self.grids[0]['upper'] - self.grids[0]['lower']) * float(data['sl'])/100
+        self.stop_loss_price = round(self.grids[0]['lower'] + (self.grids[0]['upper'] - self.grids[0]['lower']) * float(data['sl'])/100, symbol_tick_size[self.symbol]['tick_size'])
         # 获取持仓数量
         try:
-            response = client.get_account_trades(symbol=self.symbol, recvWindow=6000)
-            logger.info(response)
+            response = client.account(recvWindow=6000)
+            for item in response['positions']:
+                if item['symbol'] == self.symbol:
+                    self.position_qty = round(float(item['positionAmt']) * float(data['qty_percent'])/100, symbol_tick_size[self.symbol]['min_qty'])
+                    self.side = "BUY" if float(item['positionAmt']) > 0 else "SELL"
+                    if self.side == "SELL":
+                        self.position_qty = -self.position_qty
+                    break
         except ClientError as error:
             logger.error(
                 "Found error. status: {}, error code: {}, error message: {}".format(
                     error.status_code, error.error_code, error.error_message
-                    )
                 )
-        # 从Binance获取当前持仓数量，这里暂时用示例值
-        if response['code'] == 0 and len(response['data']) > 0:
-            total_position = response['data'][0]['qty']
-            self.position_qty = total_position * float(data['qty_percent'])/100
-            self.side = response['data'][0]['side']
-        
+            )
+
         logger.info(f'网格设置完成，初始止损价格: {self.stop_loss_price}')
 
     def place_stop_loss_order(self, price):
@@ -102,43 +145,52 @@ class GridTrader:
             response = client.new_order(
                 symbol=self.symbol,
                 side="SELL" if self.side == "BUY" else "BUY",
-                type="LIMIT",
+                type="STOP",
                 quantity=self.position_qty,
                 timeInForce="GTC",
                 price=price,
+                stopPrice=price,
             )
             logger.info(response)
+            if response['orderId'] is not None:
+                self.stop_loss_order_id = response['orderId']
+                logger.info(f'止损单已创建，ID: {self.stop_loss_order_id}')
+                send_wx_notification(f'{self.symbol} 止损单已创建', f'止损单已创建，ID: {self.stop_loss_order_id}')
+            else:
+                logger.error(f'止损单创建失败，响应: {response}')
+                send_wx_notification(f'{self.symbol} 止损单创建失败', f'止损单创建失败，响应: {response}')
+
         except ClientError as error:
             logger.error(
                 "Found error. status: {}, error code: {}, error message: {}".format(
                     error.status_code, error.error_code, error.error_message
                 )
             )
-        if response['code'] == 0:
-            self.stop_loss_order_id = response['data']['orderId']
 
     def update_stop_loss(self, current_price):
         """更新止损价格"""
-        logger.info(f'更新止损价格，当前价格: {current_price}')
+        logger.info(f'核查是否要更新止损价格，{self.symbol}当前价格: {current_price}')
         
         for i, grid in enumerate(self.grids):
             # 当价格突破网格上限时
             if current_price > grid['upper'] and not grid['activated']:
                 grid['activated'] = True
                 # 设置止盈价格为当前网格大小的tp%位置
-                tp_price = grid['lower'] + (grid['size'] * self.tp_percent/100)
+                tp_price = grid['tp_price']
                 # 更新止损价格为止盈价格
                 self.stop_loss_price = tp_price
                 self.current_grid = i
                 self.place_stop_loss_order(self.stop_loss_price)
                 logger.info(f'价格突破网格{i+1}上限，设置止盈价格: {tp_price}')
+                send_wx_notification(f'{self.symbol} 价格突破网格{i+1}上限', f'价格突破网格{i+1}上限，设置止损价格: {tp_price}')
                 break
             # 如果价格上升到了下一个网格的50%，则上移止损价格到下一个网格的下线
             elif current_price > grid['lower'] + 0.5 * grid['size'] and not grid['activated'] and self.current_grid == i - 1:
-                self.stop_loss_price = grid['lower']
+                self.stop_loss_price = grid['sl_price'] # 下一个网格的25%位置
                 self.current_grid = i
                 self.place_stop_loss_order(self.stop_loss_price)
                 logger.info(f'价格上升到网格{i}的50%，上移止损价格到网格{i+1}的下限: {self.stop_loss_price}')
+                send_wx_notification(f'{self.symbol} 价格上升到网格{i}的50%', f'价格上升到网格{i}的50%，上移止损价格到网格{i+1}的下限: {self.stop_loss_price}')
                 break
 
     def monitor_price(self):
@@ -148,8 +200,8 @@ class GridTrader:
         
         while self.is_monitoring:
             try:
-                # TODO 检查止损单是否已执行，如果已执行，则停止监控
-                positions = client.get_position_risk(symbol=self.symbol)
+                # # 检查止损单是否已执行，如果已执行，则停止监控
+                # positions = client.get_position_risk(symbol=self.symbol)
                 # 检查止损单状态
                 if self.stop_loss_order_id:
                     try:
@@ -158,8 +210,9 @@ class GridTrader:
                             orderId=self.stop_loss_order_id
                         )
                         # 如果止损单已执行完成，停止监控
-                        if order_status['status'] == 'FILLED':
+                        if order_status['status'] == 'CANCELED' or order_status['status'] == 'FILLED':
                             logger.info(f'{self.symbol} 止损单已执行，停止监控')
+                            send_wx_notification(f'{self.symbol} 止损单已执行', f'止损单已执行，停止监控')
                             self.is_monitoring = False
                             break
                     except Exception as e:
@@ -182,7 +235,7 @@ class GridTrader:
             self.monitor_thread.join()
             logger.info(f'{self.symbol} 停止价格监控')
 
-# # {
+# {
 #   "symbol": "BTCUSDT", // 币种
 # 	"qty_percent": 50, // 用于决定平仓数量。比如我手上有1000USDT的BTC，
 #                       50代表我只要有50%的仓位用于该平仓的逻辑。剩下的50%不要去动它
@@ -240,34 +293,62 @@ def send_wx_message():
     """发送微信消息"""
     while True:
         try:
-            # 为每个交易对生成状态信息
-            status_messages = []
-            for symbol, trader in trading_pairs.items():
-                # TODO: 从Binance获取实时数据
-                balance = "获取账户余额"
-                current_price = "获取当前价格"
+            # 获取当前时间
+            current_hour = datetime.now().hour
+            # 获取当前分钟
+            current_minute = datetime.now().minute
+            # 只在整点0分时发送消息
+            if current_minute != 0:
+                time.sleep(30)  # 如果不是整点,休眠1分钟后继续检查
+                continue
+            # 只在指定时间点发送消息
+            if current_hour in [0, 4, 8, 12, 16, 20]:
+                # 为每个交易对生成状态信息
+                status_messages = []
+                balance = 0
+                # 从Binance获取实时数据
+                try:
+                    response = client.balance(recvWindow=6000)
+                    for item in response:
+                        if item['asset'] == 'USDT':
+                            balance = item['balance']
+                            break
+                except ClientError as error:
+                    logger.error(
+                        "Found error. status: {}, error code: {}, error message: {}".format(
+                            error.status_code, error.error_code, error.error_message
+                        )
+                    )
+                for symbol, trader in trading_pairs.items():
+                    current_price = client.mark_price(symbol)['markPrice']
+                    status_messages.append(f"""
+                                            {symbol} 交易状态:
+                                            当前账户余额: {balance}
+                                            当前币种价格: {current_price}
+                                            当前止损价格: {trader.stop_loss_price}
+                                            当前网格情况: 第{trader.current_grid + 1}网格
+                                            """)
                 
-                status_messages.append(f"""
-                                        {symbol} 交易状态:
-                                        当前账户余额: {balance}
-                                        当前币种价格: {current_price}
-                                        当前止损价格: {trader.stop_loss_price}
-                                        当前网格情况: 第{trader.current_grid + 1}网格
-                                        """)
+                message = "\n".join(status_messages) + f"\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                mydata = {
+                    'text': '交易状态定时报告',
+                    'desp': message
+                }
+                requests.post(f'https://wx.xtuis.cn/{WX_TOKEN}.send', data=mydata)
+                logger.info('发送微信消息成功')
             
-            message = "\n".join(status_messages) + f"\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            # 休眠到下一个小时
+            next_hour = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            sleep_seconds = (next_hour - datetime.now()).total_seconds()
+            time.sleep(sleep_seconds)
             
-            mydata = {
-                'text': '交易状态定时报告',
-                'desp': message
-            }
-            requests.post(f'https://wx.xtuis.cn/{WX_TOKEN}.send', data=mydata)
-            logger.info('发送微信消息成功')
         except Exception as e:
             logger.error(f'发送微信消息失败: {str(e)}')
-        
-        # 休眠4小时
-        time.sleep(4 * 60 * 60)
+            time.sleep(60)  # 发生错误时等待1分钟后重试
+
+
+
 
 
 

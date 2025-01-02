@@ -155,6 +155,10 @@ class GridTrader:
     def place_stop_loss_order(self, price):
         """下止损单"""
         logger.info(f'下止损单，价格: {price}, 数量: {self.position_qty}')
+        if self.stop_loss_order_id:
+            logger.info(f'止损单已存在，先撤销，ID: {self.stop_loss_order_id}')
+            # 撤销之前的止损单
+            client.cancel_order(symbol=self.symbol, orderId=self.stop_loss_order_id,recvWindow=2000)
         # 调用Binance API下止损单
         # 记录止损单ID
         try:
@@ -216,8 +220,6 @@ class GridTrader:
         
         while self.is_monitoring:
             try:
-                # # 检查止损单是否已执行，如果已执行，则停止监控
-                # positions = client.get_position_risk(symbol=self.symbol)
                 # 检查止损单状态
                 if self.stop_loss_order_id:
                     try:
@@ -229,7 +231,7 @@ class GridTrader:
                         if order_status['status'] == 'CANCELED' or order_status['status'] == 'FILLED':
                             logger.info(f'{self.symbol} 止损单已执行，停止监控')
                             send_wx_notification(f'{self.symbol} 止损单已执行', f'止损单已执行，停止监控')
-                            self.is_monitoring = False
+                            self.stop_monitoring()
                             break
                     except Exception as e:
                         logger.error(f'查询止损单状态失败: {str(e)}')
@@ -336,16 +338,23 @@ def send_wx_message():
                         )
                     )
                 for symbol, trader in trading_pairs.items():
-                    current_price = client.mark_price(symbol)['markPrice']
-                    status_messages.append(f"""
+                    if trader.is_monitoring:
+                        current_price = client.mark_price(symbol)['markPrice']
+                        status_messages.append(f"""
                                             {symbol} 交易状态:
-                                            当前账户余额: {balance}
                                             当前币种价格: {current_price}
                                             当前止损价格: {trader.stop_loss_price}
-                                            当前网格情况: 第{trader.current_grid + 1}网格
+                                            处于第几个网格: 第{trader.current_grid + 1}网格
+                                            当前网格大小: {trader.grids[trader.current_grid]['size']}
+                                            当前持仓数量: {trader.position_qty}
+                                            当前持仓方向: {trader.side}
+                                            当前网格边界: {trader.grids[trader.current_grid]['lower']} - {trader.grids[trader.current_grid]['upper']}
                                             """)
+                    else:
+                        current_price = 0
+                    
                 
-                message = "\n".join(status_messages) + f"\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                message = "\n".join(status_messages)+f"\n当前账户余额: {balance}\n" + f"\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 
                 mydata = {
                     'text': '交易状态定时报告',

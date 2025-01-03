@@ -135,6 +135,8 @@ class GridTrader:
                 'size': size
             })
         
+        # TODO 把止损单通过接口捞出来，如果没有止损单，则以当前网格的下线作为止损，挂个止损单
+
         # 设置初始止损价格
         self.stop_loss_price = round(self.grids[0]['sl_price'], symbol_tick_size[self.symbol]['tick_size'])
         # 获取持仓数量
@@ -196,6 +198,15 @@ class GridTrader:
         # logger.info(f'核查是否要更新止损价格，{self.symbol}当前价格: {current_price}')
         
         for i, grid in enumerate(self.grids):
+            if current_price > grid['tp_price'] and not grid['activated']:
+                grid['activated'] = True
+                # 更新止损价格为止盈价格
+                self.stop_loss_price = grid['sl_price']
+                self.current_grid = i
+                self.place_stop_loss_order(self.stop_loss_price)
+                logger.info(f'价格来到网格{i+1}的上半部分，设置止盈价格: {self.stop_loss_price}')
+                send_wx_notification(f'{self.symbol}|网格{i+1}上移止损', f'价格来到网格{i+1}的上半部分，设置止盈价格: {self.stop_loss_price}')
+                break
             # 当价格突破网格上限时
             if current_price > grid['upper'] and not grid['activated']:
                 grid['activated'] = True
@@ -296,7 +307,8 @@ def handle_message():
         trading_pairs[symbol].set_trading_params(data)
         
         # 立即设置初始止损单
-        trading_pairs[symbol].place_stop_loss_order(trading_pairs[symbol].stop_loss_price)
+        # 将挂止损单的操作上移到set_trading_params中
+        # trading_pairs[symbol].place_stop_loss_order(trading_pairs[symbol].stop_loss_price)
         
         # 启动价格监控线程
         trading_pairs[symbol].monitor_thread = threading.Thread(

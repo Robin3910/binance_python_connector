@@ -114,25 +114,29 @@ class GridTrader:
         
     def set_trading_params(self, data):
         logger.info(f'设置交易参数: {json.dumps(data, ensure_ascii=False)}')
-        self.initial_price = float(data['price']) # 当前价格
-        grid_sizes = [float(x) for x in data['grid'].split('|')] # 网格大小
+        self.initial_price = float(data['price'])  # 当前价格
+        
+        # 解析新的网格格式
+        grid_ranges = [x.split('-') for x in data['grid'].split('|')]
         
         # 构建网格
         self.grids = []
-        current_price = self.initial_price
-        for size in grid_sizes:
+        for lower_str, upper_str in grid_ranges:
+            lower = float(lower_str)
+            upper = float(upper_str)
+            size = upper - lower
+            
             self.grids.append({
-                'lower': round(current_price - size / 2, symbol_tick_size[self.symbol]['tick_size']),
-                'upper': round(current_price + size / 2, symbol_tick_size[self.symbol]['tick_size']),
-                'tp_price': round((current_price - size / 2) + (size * float(data['tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
-                'sl_price': round((current_price - size / 2) + (size * float(data['sl'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                'lower': round(lower, symbol_tick_size[self.symbol]['tick_size']),
+                'upper': round(upper, symbol_tick_size[self.symbol]['tick_size']),
+                'tp_price': round(lower + (size * float(data['tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                'sl_price': round(lower + (size * float(data['sl'])/100), symbol_tick_size[self.symbol]['tick_size']),
                 'activated': False,
                 'size': size
             })
-            current_price += size
-            
+        
         # 设置初始止损价格
-        self.stop_loss_price = round(self.grids[0]['lower'] + (self.grids[0]['upper'] - self.grids[0]['lower']) * float(data['sl'])/100, symbol_tick_size[self.symbol]['tick_size'])
+        self.stop_loss_price = round(self.grids[0]['sl_price'], symbol_tick_size[self.symbol]['tick_size'])
         # 获取持仓数量
         try:
             response = client.account(recvWindow=6000)
@@ -258,8 +262,8 @@ class GridTrader:
 # 	"qty_percent": 50, // 用于决定平仓数量。比如我手上有1000USDT的BTC，
 #                       50代表我只要有50%的仓位用于该平仓的逻辑。剩下的50%不要去动它
 # 	"price": 100000, // 当前的价格
-# 	"grid": "1000|1000|1000", // 代表网格的大小。第一个网格则为[99000,101000]，第二个网格为[101000,102000]，
-#                               第三个网格为[102000,103000]，最多为三个网格
+# 	"grid": "96000-97000|97000-98000|98000-99000", // 代表网格的大小。第一个网格则为[96000,97000]，第二个网格为[97000,98000]，
+#                               第三个网格为[98000,99000]，最多为三个网格
 # 	"sl": 20, // 代表当价格下跌的20%的时候，就平仓。
 # 	"tp": 75, // 当价格冲破第一个网格的上线时，即101000，设置一个出场点在第一个网格的75%的位置，
 #                如果价格下跌到第一个网格的75%则平仓止盈。如果价格还是不断上升，达到第二个网格的50%，则启动第二个网格的逻辑。

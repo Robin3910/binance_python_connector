@@ -12,6 +12,9 @@ from logging.handlers import RotatingFileHandler
 from binance.um_futures import UMFutures as Client
 from binance.error import ClientError
 from config import BINANCE_CONFIG, WX_CONFIG
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import os
 
 app = Flask(__name__)
 
@@ -117,6 +120,25 @@ class GridTrader:
         logger.info(f'设置交易参数: {json.dumps(data, ensure_ascii=False)}')
         self.initial_price = float(data['price'])  # 当前价格
         
+        # 获取持仓数量
+        try:
+            account_res = client.account(recvWindow=6000)
+            for item in account_res['positions']:
+                if item['symbol'] == self.symbol:
+                    self.position_qty = round(float(item['positionAmt']) * float(data['qty_percent'])/100, symbol_tick_size[self.symbol]['min_qty'])
+                    self.side = "BUY" if float(item['positionAmt']) > 0 else "SELL"
+                    if self.side == "SELL":
+                        self.position_qty = -self.position_qty
+                    break
+        except ClientError as error:
+            send_wx_notification(f'获取持仓数量失败', f'获取持仓数量失败，错误: {error}')
+            logger.error(
+                "Found error. status: {}, error code: {}, error message: {}".format(
+                    error.status_code, error.error_code, error.error_message
+                )
+            )
+            return
+        
         # 解析新的网格格式
         grid_ranges = [x.split('-') for x in data['grid'].split('|')]
         
@@ -150,6 +172,8 @@ class GridTrader:
                     'size': size
                 })
 
+        
+        
         if self.side == "BUY":
             self.stop_loss_price = round(self.grids[0]['lower'], symbol_tick_size[self.symbol]['tick_size'])
         else:
@@ -164,22 +188,7 @@ class GridTrader:
                 logger.info(f'{self.symbol} 不存在止损单，挂止损单')
                 # 设置初始止损价格
                 # 获取持仓数量
-                try:
-                    account_res = client.account(recvWindow=6000)
-                    for item in account_res['positions']:
-                        if item['symbol'] == self.symbol:
-                            self.position_qty = round(float(item['positionAmt']) * float(data['qty_percent'])/100, symbol_tick_size[self.symbol]['min_qty'])
-                            self.side = "BUY" if float(item['positionAmt']) > 0 else "SELL"
-                            if self.side == "SELL":
-                                self.position_qty = -self.position_qty
-                            break
-                except ClientError as error:
-                    send_wx_notification(f'获取持仓数量失败', f'获取持仓数量失败，错误: {error}')
-                    logger.error(
-                        "Found error. status: {}, error code: {}, error message: {}".format(
-                            error.status_code, error.error_code, error.error_message
-                        )
-                    )
+                
                 self.place_stop_loss_order(self.stop_loss_price)
         except ClientError as error:
             logger.error(f'获取止损单失败，错误: {error}')
@@ -309,6 +318,48 @@ class GridTrader:
         if self.monitor_thread:
             self.monitor_thread.join()
             logger.info(f'{self.symbol} 停止价格监控')
+
+class ConfigFileHandler(FileSystemEventHandler):
+    def __init__(self):
+        self.last_modified = 0
+    
+    def on_modified(self, event):
+        if event.src_path.endswith('config.py'):
+            # 防止重复触发
+            current_time = time.time()
+            if current_time - self.last_modified < 1:  # 1秒内的修改忽略
+                return
+            self.last_modified = current_time
+            
+            logger.info("检测到配置文件变更，重新加载配置...")
+            try:
+                # 重新加载配置模块
+                import importlib
+                import config
+                importlib.reload(config)
+                
+                global WX_TOKEN, ip_white_list, client
+                WX_TOKEN = config.WX_CONFIG['token']
+                ip_white_list = config.BINANCE_CONFIG['ip_white_list']
+                client = Client(
+                    config.BINANCE_CONFIG['key'],
+                    config.BINANCE_CONFIG['secret'],
+                    base_url=config.BINANCE_CONFIG['base_url']
+                )
+                logger.info("配置文件重新加载成功")
+                send_wx_notification("配置更新", "配置文件已成功重新加载")
+            except Exception as e:
+                logger.error(f"重新加载配置文件失败: {str(e)}")
+                send_wx_notification("配置更新失败", f"重新加载配置文件时发生错误: {str(e)}")
+
+def start_config_monitor():
+    event_handler = ConfigFileHandler()
+    observer = Observer()
+    # 监控配置文件所在的目录
+    config_path = os.path.dirname(os.path.abspath(__file__))
+    observer.schedule(event_handler, config_path, recursive=False)
+    observer.start()
+    logger.info("配置文件监控已启动")
 
 # {
 #   "symbol": "BTCUSDT", // 币种
@@ -443,6 +494,9 @@ def before_req():
 
 
 if __name__ == '__main__':
+    # 启动配置文件监控
+    start_config_monitor()
+    
     # 启动定时发送消息的线程
     message_thread = threading.Thread(target=send_wx_message)
     message_thread.daemon = True

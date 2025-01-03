@@ -88,6 +88,7 @@ try:
             'min_qty': get_decimal_places(item['filters'][1]['minQty']),
         }
 except ClientError as error:
+    send_wx_notification(f'获取币种精度失败', f'获取币种精度失败，错误: {error}')
     logger.error(
         "Found error. status: {}, error code: {}, error message: {}".format(
             error.status_code, error.error_code, error.error_message
@@ -125,44 +126,71 @@ class GridTrader:
             lower = float(lower_str)
             upper = float(upper_str)
             size = upper - lower
-            
-            self.grids.append({
-                'lower': round(lower, symbol_tick_size[self.symbol]['tick_size']),
-                'upper': round(upper, symbol_tick_size[self.symbol]['tick_size']),
-                'tp_price': round(lower + (size * float(data['tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
-                'sl_price': round(lower + (size * float(data['sl'])/100), symbol_tick_size[self.symbol]['tick_size']),
-                'activated': False,
-                'size': size
-            })
-        
-        # TODO 把止损单通过接口捞出来，如果没有止损单，则以当前网格的下线作为止损，挂个止损单
+            if self.side == "BUY":
+                self.grids.append({
+                    'lower': round(lower, symbol_tick_size[self.symbol]['tick_size']),
+                    'upper': round(upper, symbol_tick_size[self.symbol]['tick_size']),
+                    'grid_target': round(lower + (size * float(data['grid_target'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                    'grid_tp': round(lower + (size * float(data['grid_tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                    'break_tp': round(lower + (size * float(data['break_tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                    'activated_target_1': False, # 网格下半部分的出场点是否被触发   
+                    'activated_target_2': False, # 网格上半部分的出场点是否被触发
+                    'size': size
+                })
 
-        # 设置初始止损价格
-        self.stop_loss_price = round(self.grids[0]['sl_price'], symbol_tick_size[self.symbol]['tick_size'])
-        # 获取持仓数量
+            else:
+                self.grids.append({
+                    'lower': round(lower, symbol_tick_size[self.symbol]['tick_size']),
+                    'upper': round(upper, symbol_tick_size[self.symbol]['tick_size']),
+                    'grid_target': round(upper - (size * float(data['grid_target'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                    'grid_tp': round(upper - (size * float(data['grid_tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                    'break_tp': round(upper - (size * float(data['break_tp'])/100), symbol_tick_size[self.symbol]['tick_size']),
+                    'activated_target_1': False, # 网格下半部分的出场点是否被触发   
+                    'activated_target_2': False, # 网格上半部分的出场点是否被触发
+                    'size': size
+                })
+
+        if self.side == "BUY":
+            self.stop_loss_price = round(self.grids[0]['lower'], symbol_tick_size[self.symbol]['tick_size'])
+        else:
+            self.stop_loss_price = round(self.grids[0]['upper'], symbol_tick_size[self.symbol]['tick_size'])
+        # 把止损单通过接口捞出来，如果没有止损单，则以当前网格的下线作为止损，挂个止损单
         try:
-            response = client.account(recvWindow=6000)
-            for item in response['positions']:
-                if item['symbol'] == self.symbol:
-                    self.position_qty = round(float(item['positionAmt']) * float(data['qty_percent'])/100, symbol_tick_size[self.symbol]['min_qty'])
-                    self.side = "BUY" if float(item['positionAmt']) > 0 else "SELL"
-                    if self.side == "SELL":
-                        self.position_qty = -self.position_qty
-                    break
+            order_res = client.get_orders(symbol=self.symbol, recvWindow=2000)
+            if len(order_res) > 0:
+                logger.info(f'{self.symbol} 已存在止损单，无需处理')
+                self.stop_loss_order_id = order_res[0]['orderId']
+            else:
+                logger.info(f'{self.symbol} 不存在止损单，挂止损单')
+                # 设置初始止损价格
+                # 获取持仓数量
+                try:
+                    account_res = client.account(recvWindow=6000)
+                    for item in account_res['positions']:
+                        if item['symbol'] == self.symbol:
+                            self.position_qty = round(float(item['positionAmt']) * float(data['qty_percent'])/100, symbol_tick_size[self.symbol]['min_qty'])
+                            self.side = "BUY" if float(item['positionAmt']) > 0 else "SELL"
+                            if self.side == "SELL":
+                                self.position_qty = -self.position_qty
+                            break
+                except ClientError as error:
+                    send_wx_notification(f'获取持仓数量失败', f'获取持仓数量失败，错误: {error}')
+                    logger.error(
+                        "Found error. status: {}, error code: {}, error message: {}".format(
+                            error.status_code, error.error_code, error.error_message
+                        )
+                    )
+                self.place_stop_loss_order(self.stop_loss_price)
         except ClientError as error:
-            logger.error(
-                "Found error. status: {}, error code: {}, error message: {}".format(
-                    error.status_code, error.error_code, error.error_message
-                )
-            )
+            logger.error(f'获取止损单失败，错误: {error}')
 
-        logger.info(f'网格设置完成，初始止损价格: {self.stop_loss_price}')
+        logger.info(f'{self.symbol} 网格设置完成|网格情况: {json.dumps(self.grids, ensure_ascii=False)}')
 
     def place_stop_loss_order(self, price):
         """下止损单"""
-        logger.info(f'下止损单，价格: {price}, 数量: {self.position_qty}')
+        logger.info(f'{self.symbol} 下止损单，价格: {price}, 数量: {self.position_qty}')
         if self.stop_loss_order_id:
-            logger.info(f'止损单已存在，先撤销，ID: {self.stop_loss_order_id}')
+            logger.info(f'{self.symbol} 止损单已存在，先撤销，ID: {self.stop_loss_order_id}')
             # 撤销之前的止损单
             client.cancel_order(symbol=self.symbol, orderId=self.stop_loss_order_id,recvWindow=2000)
         # 调用Binance API下止损单
@@ -187,6 +215,7 @@ class GridTrader:
                 send_wx_notification(f'{self.symbol} 止损单创建失败', f'止损单创建失败，响应: {response}')
 
         except ClientError as error:
+            send_wx_notification(f'{self.symbol} 止损单创建失败', f'止损单创建失败，错误: {error}')
             logger.error(
                 "Found error. status: {}, error code: {}, error message: {}".format(
                     error.status_code, error.error_code, error.error_message
@@ -195,38 +224,51 @@ class GridTrader:
 
     def update_stop_loss(self, current_price):
         """更新止损价格"""
-        # logger.info(f'核查是否要更新止损价格，{self.symbol}当前价格: {current_price}')
-        
         for i, grid in enumerate(self.grids):
-            if current_price > grid['tp_price'] and not grid['activated']:
-                grid['activated'] = True
-                # 更新止损价格为止盈价格
-                self.stop_loss_price = grid['sl_price']
-                self.current_grid = i
-                self.place_stop_loss_order(self.stop_loss_price)
-                logger.info(f'价格来到网格{i+1}的上半部分，设置止盈价格: {self.stop_loss_price}')
-                send_wx_notification(f'{self.symbol}|网格{i+1}上移止损', f'价格来到网格{i+1}的上半部分，设置止盈价格: {self.stop_loss_price}')
-                break
-            # 当价格突破网格上限时
-            if current_price > grid['upper'] and not grid['activated']:
-                grid['activated'] = True
-                # 设置止盈价格为当前网格大小的tp%位置
-                tp_price = grid['tp_price']
-                # 更新止损价格为止盈价格
-                self.stop_loss_price = tp_price
-                self.current_grid = i
-                self.place_stop_loss_order(self.stop_loss_price)
-                logger.info(f'价格突破网格{i+1}上限，设置止盈价格: {tp_price}')
-                send_wx_notification(f'{self.symbol} 价格突破网格{i+1}上限', f'价格突破网格{i+1}上限，设置止损价格: {tp_price}')
-                break
-            # 如果价格上升到了下一个网格的50%，则上移止损价格到下一个网格的下线
-            elif current_price > grid['lower'] + 0.5 * grid['size'] and not grid['activated'] and self.current_grid == i - 1:
-                self.stop_loss_price = grid['sl_price'] # 下一个网格的25%位置
-                self.current_grid = i
-                self.place_stop_loss_order(self.stop_loss_price)
-                logger.info(f'价格上升到网格{i}的50%，上移止损价格到网格{i+1}的下限: {self.stop_loss_price}')
-                send_wx_notification(f'{self.symbol} 价格上升到网格{i}的50%', f'价格上升到网格{i}的50%，上移止损价格到网格{i+1}的下限: {self.stop_loss_price}')
-                break
+            if self.side == "BUY":
+                if current_price > grid['lower'] and current_price < grid['upper']:
+                    self.current_grid = i
+                # 来到网格的上半部分，上移止损位置到网格的sl_price位置
+                if current_price >= grid['grid_target'] and not grid['activated_target_1']:
+                    grid['activated_target_1'] = True # 标记为已激活
+                    # 更新止损价格为止盈价格
+                    self.stop_loss_price = grid['grid_tp']
+                    self.place_stop_loss_order(self.stop_loss_price)
+                    logger.info(f'{self.symbol}做多|价格来到网格{i+1}的上半部分，设置止盈价格: {self.stop_loss_price}')
+                    send_wx_notification(f'{self.symbol}|网格{i+1}上移止损', f'价格来到网格{i+1}的上半部分，设置止盈价格: {self.stop_loss_price}')
+                    break
+                # 当价格突破网格上限时
+                if current_price >= grid['upper'] and not grid['activated_target_2']:
+                    grid['activated_target_2'] = True
+                    # 更新止损价格为止盈价格
+                    self.stop_loss_price = grid['break_tp']
+                    self.place_stop_loss_order(self.stop_loss_price)
+                    logger.info(f'{self.symbol}做多|价格突破网格{i+1}上限，设置止盈价格: {self.stop_loss_price}')
+                    send_wx_notification(f'{self.symbol}做多|价格突破网格{i+1}上限', f'价格突破网格{i+1}上限，设置止损价格: {self.stop_loss_price}')
+                    break
+
+            else:
+                # 做空的逻辑
+                if current_price < grid['upper'] and current_price > grid['lower']:
+                    self.current_grid = i
+                # 来到网格的下半部分，下移止损位置到网格1的sl_price位置
+                if current_price <= grid['grid_target'] and not grid['activated_target_1']:
+                    grid['activated_target_1'] = True # 标记为已激活
+                    # 更新止损价格为止盈价格
+                    self.stop_loss_price = grid['grid_tp']
+                    self.place_stop_loss_order(self.stop_loss_price)
+                    logger.info(f'{self.symbol}做空| 价格来到网格{i+1}的下半部分，设置止盈价格: {self.stop_loss_price}')
+                    send_wx_notification(f'{self.symbol}做空|网格{i+1}下移止损', f'价格来到网格{i+1}的下半部分，设置止盈价格: {self.stop_loss_price}')
+                    break
+                # 当价格突破网格下限时
+                if current_price <= grid['lower'] and not grid['activated_target_2']:
+                    grid['activated_target_2'] = True
+                    # 更新止损价格为止盈价格
+                    self.stop_loss_price = grid['break_tp']
+                    self.place_stop_loss_order(self.stop_loss_price)
+                    logger.info(f'{self.symbol}做空|价格突破网格{i+1}下限，设置止盈价格: {self.stop_loss_price}')
+                    send_wx_notification(f'{self.symbol}做空|价格突破网格{i+1}下限', f'价格突破网格{i+1}下限，设置止损价格: {self.stop_loss_price}')
+                    break
 
     def monitor_price(self):
         """监控价格并更新止损"""
@@ -255,7 +297,7 @@ class GridTrader:
                 
                 # 更新止损价格
                 self.update_stop_loss(current_price)
-                
+
                 time.sleep(2)  # 每2秒检查一次
             except Exception as e:
                 logger.error(f'{self.symbol} 监控价格时发生错误: {str(e)}')
@@ -275,10 +317,9 @@ class GridTrader:
 # 	"price": 100000, // 当前的价格
 # 	"grid": "96000-97000|97000-98000|98000-99000", // 代表网格的大小。第一个网格则为[96000,97000]，第二个网格为[97000,98000]，
 #                               第三个网格为[98000,99000]，最多为三个网格
-# 	"sl": 20, // 代表当价格下跌的20%的时候，就平仓。
-# 	"tp": 75, // 当价格冲破第一个网格的上线时，即101000，设置一个出场点在第一个网格的75%的位置，
-#                如果价格下跌到第一个网格的75%则平仓止盈。如果价格还是不断上升，达到第二个网格的50%，则启动第二个网格的逻辑。
-#                第二个网格的止盈止损逻辑与第一个网格是类似的。同理，第三个网格的逻辑也和第二个网格的逻辑一致。
+# 	"grid_target": 75, // 触达到网格的75%位置，则设置止损位到grid_tp的位置
+# 	"grid_tp": 20, // 网格下半部分的止盈位置
+# 	"break_tp": 70, // 当价格突破网格的上线时，设置一个出场点在网格的70%的位置。
 # }
 # 
 @app.route('/message', methods=['POST'])

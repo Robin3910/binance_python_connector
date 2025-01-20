@@ -52,7 +52,7 @@ def send_wx_notification(title, message):
             'text': title,
             'desp': message
         }
-        requests.post(f'https://wx.xtuis.cn/{WX_TOKEN}.send', data=mydata)
+        requests.get(f'https://wx.xtuis.cn/{WX_TOKEN}.send?text={title}&desp={message}')
         logger.info('发送微信消息成功')
     except Exception as e:
         logger.error(f'发送微信消息失败: {str(e)}')

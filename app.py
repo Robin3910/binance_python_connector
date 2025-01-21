@@ -377,7 +377,7 @@ def start_config_monitor():
 def handle_message():
     try:
         data = request.get_json()
-        symbol = data['symbol']
+        symbol = prefix_symbol(data['symbol'])
         logger.info(f'收到 {symbol} 的新交易参数请求: {json.dumps(data, ensure_ascii=False)}')
         
         # 检查该币种是否已在监控中

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from binance.um_futures import UMFutures as Client
 import threading
 import time
@@ -15,6 +15,8 @@ from config import BINANCE_CONFIG, WX_CONFIG
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import os
+import secrets
+from functools import wraps
 
 app = Flask(__name__)
 
@@ -22,6 +24,9 @@ app = Flask(__name__)
 WX_TOKEN = WX_CONFIG['token']
 
 ip_white_list = BINANCE_CONFIG['ip_white_list']
+
+# 添加 Flask secret key
+app.secret_key = secrets.token_hex(16)
 
 client = Client(
     BINANCE_CONFIG['key'], 
@@ -264,19 +269,86 @@ def send_wx_message():
 
 @app.before_request
 def before_req():
-    logger.info(request.json)
-    if request.json is None:
-        return jsonify({'error': '请求体不能为空'}), 400
-    if request.remote_addr not in ip_white_list:
-        logger.info(f'ipWhiteList: {ip_white_list}')
-        logger.info(f'ip is not in ipWhiteList: {request.remote_addr}')
-        return jsonify({'error': 'ip is not in ipWhiteList'}), 403
+    # 排除登录路由和静态文件
+    if request.path == '/login' or request.path == '/' or request.path.startswith('/static'):
+        return
+        
+    # 只对 POST 请求进行 JSON 和 IP 检查
+    if request.method == 'POST':
+        # 检查 Content-Type
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type 必须是 application/json'}), 415
+            
+        if request.json is None:
+            return jsonify({'error': '请求体不能为空'}), 400
+            
+        if request.remote_addr not in ip_white_list:
+            logger.info(f'ipWhiteList: {ip_white_list}')
+            logger.info(f'ip is not in ipWhiteList: {request.remote_addr}')
+            return jsonify({'error': 'ip is not in ipWhiteList'}), 403
 
+# 添加登录验证装饰器
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'logged_in' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# 登录路由
+@app.route('/', methods=['GET'])
+@app.route('/login', methods=['GET', "POST"])
+def login():
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == 'leledahuanxi123':
+            session['logged_in'] = True
+            return redirect(url_for('config'))
+        return render_template('login.html', error='密码错误')
+    return render_template('login.html')
+
+# 配置页面路由
+@app.route('/config', methods=['GET'])
+@login_required
+def config():
+    return render_template('config.html')
+
+# 更新配置接口
+@app.route('/update_config', methods=['POST'])
+@login_required
+def update_config():
+    try:
+        data = request.get_json()
+        api_key = data.get('api_key')
+        api_secret = data.get('api_secret')
+        environment = data.get('environment')
+        
+        # 更新 client
+        global client
+        base_url = 'https://fapi.binance.com' if environment == 'PRD' else 'https://testnet.binancefuture.com'
+        client = Client(api_key, api_secret, base_url=base_url)
+        
+        # 测试连接
+        client.account()
+        
+        return jsonify({"status": "success", "message": "配置更新成功"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/reset_trading', methods=['GET'])
+@login_required
+def reset_trading():
+    try:
+        global trading_pairs
+        trading_pairs = {}
+        logger.info('所有交易参数已重置')
+        return jsonify({"status": "success", "message": "所有交易参数已重置"})
+    except Exception as e:
+        logger.error(f'重置交易参数失败: {str(e)}')
+        return jsonify({"status": "error", "message": str(e)})
 
 if __name__ == '__main__':
-    # 启动配置文件监控
-    start_config_monitor()
 
-    
     # 启动Flask服务
     app.run(host='0.0.0.0', port=80)

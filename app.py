@@ -100,24 +100,95 @@ except ClientError as error:
 
 # 创建全局字典来存储不同币种的交易信息
 trading_pairs = {}
-
+# 请求参数
+# {
+#     "symbol": "BTCUSDT",
+#     "entry_price_percent": 0.01,
+#     "entry_usdt": 300,
+#     "exit_price_percent": 0.01,
+#     "open_price": 10000,
+# }
 @app.route('/message', methods=['POST'])
 def handle_message():
     try:
         data = request.get_json()
         symbol = data['symbol']
+        entry_price_percent = float(data['entry_price_percent'])
+        entry_usdt = float(data['entry_usdt'])
+        exit_price_percent = float(data['exit_price_percent'])
+        open_price = float(data['open_price'])
         logger.info(f'收到 {symbol} 的新交易参数请求: {json.dumps(data, ensure_ascii=False)}')
 
+        trading_pairs[symbol] = {
+            'entry_price_percent': entry_price_percent,
+            'entry_usdt': entry_usdt,
+            'exit_price_percent': exit_price_percent,
+            'open_price': open_price,
+        }
+
         # 判断是否有持仓
+        pos_response = client.position_risk(symbol)
+        position_qty = 0
+        if pos_response and len(pos_response) > 0:
+            position_qty = float(pos_response[0]['positionAmt'])
+            entry_price = float(pos_response[0]['entryPrice'])
+        if position_qty != 0:
+            # 判断一下上一次的出场单是否已经成交
+            if trading_pairs[symbol]['exit_order_id'] is not None:
+                order_response = client.get_order(symbol, trading_pairs[symbol]['exit_order_id'])
+                if order_response['status'] == 'FILLED':
+                    # 已经成交的话应该就没仓位了
+                    logger.info(f'{symbol} | 上一次的出场单已经成交')
+                else:
+                    logger.warning(f'{symbol} | 上一次的出场单未成交,撤掉上一次的出场单')
+                    # 删除上一次的出场单
+                    client.cancel_order(symbol, trading_pairs[symbol]['exit_order_id'])
 
+                    # 挂个新的出场单
+                    order_response = client.new_order(
+                        symbol=symbol,
+                        side="SELL",
+                        type="LIMIT",
+                        quantity=position_qty,
+                        timeInForce="GTC",
+                        price=round(open_price * (1-exit_price_percent), symbol_tick_size[symbol]['tick_size'])
+                    )
+                    logger.info(order_response)
+                    if order_response['orderId'] is not None:
+                        trading_pairs[symbol]['exit_order_id'] = order_response['orderId']
+                        logger.info(f'{symbol} | 出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
+                        send_wx_notification(f'{symbol} | 出场单已创建', f'出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
+                    else:
+                        logger.error(f'{symbol} | 出场单创建失败，响应: {order_response}')
+                        send_wx_notification(f'{symbol} | 出场单创建失败', f'出场单创建失败，响应: {order_response}')
 
-        # 判断之前的单子是否已经成交
+        # 判断之前的限价单是否已经成交，如果没成交，挂上一个限价单
+        if trading_pairs[symbol]['entry_order_id'] is not None:
+            order_response = client.get_order(symbol, trading_pairs[symbol]['entry_order_id'])
+            if order_response['status'] == 'FILLED':
+                logger.info(f'{symbol} | 入场单已经成交')
+            else:
+                logger.warning(f'{symbol} | 入场单未成交,撤掉入场单')
+                client.cancel_order(symbol, trading_pairs[symbol]['entry_order_id'])
 
-        # 如果成交，需要撤单
+                # 挂上一个新的入场单
+                order_response = client.new_order(
+                    symbol=symbol,
+                    side="BUY",
+                    type="LIMIT",
+                    quantity=position_qty,
+                    timeInForce="GTC",
+                    price=round(open_price * (1-entry_price_percent), symbol_tick_size[symbol]['tick_size'])
+                )
+                logger.info(order_response)
+                if order_response['orderId'] is not None:
+                    trading_pairs[symbol]['entry_order_id'] = order_response['orderId']
+                    logger.info(f'{symbol} | 入场单已创建，ID: {trading_pairs[symbol]["entry_order_id"]}')
+                    send_wx_notification(f'{symbol} | 入场单已创建', f'入场单已创建，ID: {trading_pairs[symbol]["entry_order_id"]}')
+                else:
+                    logger.error(f'{symbol} | 入场单创建失败，响应: {order_response}')
+                    send_wx_notification(f'{symbol} | 入场单创建失败', f'入场单创建失败，响应: {order_response}')
 
-        # 挂上一个限价单
-        
-        
         logger.info(f'{symbol} 交易参数设置成功')
         return jsonify({"status": "success", "message": f"{symbol} 交易参数设置成功"})
     except Exception as e:

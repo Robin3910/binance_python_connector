@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
-from binance.um_futures import UMFutures as Client
-import threading
 import time
 import requests
 from datetime import datetime, timedelta
@@ -89,6 +86,8 @@ logger = setup_logger()
 # 获取币种的精度
 try:
     exchange_info = client.exchange_info()['symbols']
+    if exchange_info is None:
+        raise Exception('获取币种精度失败')
     symbol_tick_size = {}
     for item in exchange_info:
         symbol_tick_size[item['symbol']] = {
@@ -113,9 +112,34 @@ trading_pairs = {}
 #     "exit_price_percent": 0.01,
 #     "open_price": 10000,
 # }
+
+# 添加JSON文件操作函数
+def load_trading_pairs():
+    """从JSON文件加载交易对信息"""
+    try:
+        if os.path.exists('trading_pairs.json'):
+            with open('trading_pairs.json', 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        logger.error(f'加载trading_pairs.json失败: {str(e)}')
+        return {}
+
+def save_trading_pairs(trading_pairs):
+    """保存交易对信息到JSON文件"""
+    try:
+        with open('trading_pairs.json', 'w', encoding='utf-8') as f:
+            json.dump(trading_pairs, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        logger.error(f'保存trading_pairs.json失败: {str(e)}')
+
 @app.route('/message', methods=['POST'])
 def handle_message():
     try:
+        # 从JSON文件加载现有的交易对信息
+        global trading_pairs
+        trading_pairs = load_trading_pairs()
+        
         data = request.get_json()
         symbol = data['symbol']
         entry_price_percent = float(data['entry_price_percent'])
@@ -124,148 +148,97 @@ def handle_message():
         open_price = float(data['open_price'])
         logger.info(f'收到 {symbol} 的新交易参数请求: {json.dumps(data, ensure_ascii=False)}')
 
-        trading_pairs[symbol] = {
-            'entry_price_percent': entry_price_percent,
-            'entry_usdt': entry_usdt,
-            'exit_price_percent': exit_price_percent,
-            'open_price': open_price,
-        }
+        if trading_pairs.get(symbol) is None:
+            trading_pairs[symbol] = {
+                'entry_price_percent': entry_price_percent,
+                'entry_usdt': entry_usdt,
+                'exit_price_percent': exit_price_percent,
+                'open_price': open_price,
+                'entry_order_id': None,
+                'exit_order_id': None,
+            }
 
         # 判断是否有持仓
-        pos_response = client.position_risk(symbol)
+        pos_response = client.get_position_risk(recvWindow=60000)
+        
         position_qty = 0
         if pos_response and len(pos_response) > 0:
-            position_qty = float(pos_response[0]['positionAmt'])
-            entry_price = float(pos_response[0]['entryPrice'])
+            for item in pos_response:
+                if item['symbol'] == symbol:
+                    position_qty = float(item['positionAmt'])
+                    break
         if position_qty != 0:
             # 判断一下上一次的出场单是否已经成交
             if trading_pairs[symbol]['exit_order_id'] is not None:
-                order_response = client.get_order(symbol, trading_pairs[symbol]['exit_order_id'])
+                order_response = client.get_open_orders(symbol, trading_pairs[symbol]['exit_order_id'])
                 if order_response['status'] == 'FILLED':
                     # 已经成交的话应该就没仓位了
-                    logger.info(f'{symbol} | 上一次的出场单已经成交')
+                    logger.info(f'{symbol} | 上一次的出场单已经成交, orderId: {trading_pairs[symbol]['exit_order_id']}')
                 else:
                     logger.warning(f'{symbol} | 上一次的出场单未成交,撤掉上一次的出场单')
                     # 删除上一次的出场单
                     client.cancel_order(symbol, trading_pairs[symbol]['exit_order_id'])
 
-                    # 挂个新的出场单
-                    order_response = client.new_order(
-                        symbol=symbol,
-                        side="SELL",
-                        type="LIMIT",
-                        quantity=position_qty,
-                        timeInForce="GTC",
-                        price=round(open_price * (1-exit_price_percent), symbol_tick_size[symbol]['tick_size'])
-                    )
-                    logger.info(order_response)
-                    if order_response['orderId'] is not None:
-                        trading_pairs[symbol]['exit_order_id'] = order_response['orderId']
-                        logger.info(f'{symbol} | 出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
-                        send_wx_notification(f'{symbol} | 出场单已创建', f'出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
-                    else:
-                        logger.error(f'{symbol} | 出场单创建失败，响应: {order_response}')
-                        send_wx_notification(f'{symbol} | 出场单创建失败', f'出场单创建失败，响应: {order_response}')
+            # 挂个新的出场单
+            order_response = client.new_order(
+                symbol=symbol,
+                side="SELL",
+                type="LIMIT",
+                quantity=position_qty,
+                timeInForce="GTC",
+                price=round(open_price * (1-exit_price_percent), symbol_tick_size[symbol]['tick_size'])
+            )
+            logger.info(order_response)
+            if order_response['orderId'] is not None:
+                trading_pairs[symbol]['exit_order_id'] = order_response['orderId']
+                logger.info(f'{symbol} | 出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
+                send_wx_notification(f'{symbol} | 出场单已创建', f'出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
+            else:
+                logger.error(f'{symbol} | 出场单创建失败，响应: {order_response}')
+                send_wx_notification(f'{symbol} | 出场单创建失败', f'出场单创建失败，响应: {order_response}')
 
-        # 判断之前的限价单是否已经成交，如果没成交，挂上一个限价单
+        # 判断之前的限价单是否已经成交，如果没成交，先撤单
         if trading_pairs[symbol]['entry_order_id'] is not None:
-            order_response = client.get_order(symbol, trading_pairs[symbol]['entry_order_id'])
+            order_response = client.get_open_orders(symbol, trading_pairs[symbol]['entry_order_id'])
             if order_response['status'] == 'FILLED':
                 logger.info(f'{symbol} | 入场单已经成交')
             else:
-                logger.warning(f'{symbol} | 入场单未成交,撤掉入场单')
-                client.cancel_order(symbol, trading_pairs[symbol]['entry_order_id'])
-
-                # 挂上一个新的入场单
-                order_response = client.new_order(
-                    symbol=symbol,
-                    side="BUY",
-                    type="LIMIT",
-                    quantity=position_qty,
-                    timeInForce="GTC",
-                    price=round(open_price * (1-entry_price_percent), symbol_tick_size[symbol]['tick_size'])
-                )
-                logger.info(order_response)
-                if order_response['orderId'] is not None:
-                    trading_pairs[symbol]['entry_order_id'] = order_response['orderId']
-                    logger.info(f'{symbol} | 入场单已创建，ID: {trading_pairs[symbol]["entry_order_id"]}')
-                    send_wx_notification(f'{symbol} | 入场单已创建', f'入场单已创建，ID: {trading_pairs[symbol]["entry_order_id"]}')
+                logger.info(f'{symbol} | 入场单未成交,撤掉入场单')
+                cancel_response = client.cancel_order(symbol, trading_pairs[symbol]['entry_order_id'])
+                if cancel_response['status'] == 'CANCELED':
+                    logger.info(f'{symbol} | 入场单已撤单')
                 else:
-                    logger.error(f'{symbol} | 入场单创建失败，响应: {order_response}')
-                    send_wx_notification(f'{symbol} | 入场单创建失败', f'入场单创建失败，响应: {order_response}')
+                    logger.error(f'{symbol} | 入场单撤单失败，响应: {cancel_response}')
+                    send_wx_notification(f'{symbol} | 入场单撤单失败', f'入场单撤单失败，响应: {cancel_response}')
 
+        # 无论之前的单子是否成交，都需要挂上一个新的入场单
+        entry_price = round(open_price * (1-entry_price_percent), symbol_tick_size[symbol]['tick_size'])
+        qty = round(entry_usdt / entry_price, symbol_tick_size[symbol]['min_qty'])
+        order_response = client.new_order(
+            symbol=symbol,
+            side="BUY",
+            type="LIMIT",
+            quantity=qty,
+            timeInForce="GTC",
+            price=round(open_price * (1-entry_price_percent), symbol_tick_size[symbol]['tick_size'])
+        )
+        logger.info(order_response)
+        if order_response['orderId'] is not None:
+            trading_pairs[symbol]['entry_order_id'] = order_response['orderId']
+            logger.info(f'{symbol} | 入场单已创建，ID: {trading_pairs[symbol]["entry_order_id"]}')
+            send_wx_notification(f'{symbol} | 入场单已创建', f'入场单已创建，ID: {trading_pairs[symbol]["entry_order_id"]}')
+        else:
+            logger.error(f'{symbol} | 入场单创建失败，响应: {order_response}')
+            send_wx_notification(f'{symbol} | 入场单创建失败', f'入场单创建失败，响应: {order_response}')
+
+        # 在处理完成后保存交易对信息
+        save_trading_pairs(trading_pairs)
+        
         logger.info(f'{symbol} 交易参数设置成功')
         return jsonify({"status": "success", "message": f"{symbol} 交易参数设置成功"})
     except Exception as e:
         logger.error(f'设置交易参数失败: {str(e)}')
         return jsonify({"status": "error", "message": str(e)})
-
-def send_wx_message():
-    """发送微信消息"""
-    while True:
-        try:
-            # 获取当前时间
-            current_hour = datetime.now().hour
-            # 获取当前分钟
-            current_minute = datetime.now().minute
-            # 只在整点0分时发送消息
-            if current_minute != 0:
-                time.sleep(30)  # 如果不是整点,休眠1分钟后继续检查
-                continue
-            # 只在指定时间点发送消息
-            if current_hour in [0, 4, 8, 12, 16, 20]:
-                # 为每个交易对生成状态信息
-                status_messages = []
-                balance = 0
-                # 从Binance获取实时数据
-                try:
-                    response = client.balance(recvWindow=6000)
-                    for item in response:
-                        if item['asset'] == 'USDT':
-                            balance = item['balance']
-                            break
-                except ClientError as error:
-                    logger.error(
-                        "Found error. status: {}, error code: {}, error message: {}".format(
-                            error.status_code, error.error_code, error.error_message
-                        )
-                    )
-                for symbol, trader in trading_pairs.items():
-                    if trader.is_monitoring:
-                        current_price = client.mark_price(symbol)['markPrice']
-                        status_messages.append(f"""
-                                            {symbol} 交易状态:
-                                            当前币种价格: {current_price}
-                                            当前止损价格: {trader.stop_loss_price}
-                                            处于第几个网格: 第{trader.current_grid + 1}网格
-                                            当前网格大小: {trader.grids[trader.current_grid]['size']}
-                                            当前持仓数量: {trader.position_qty}
-                                            当前持仓方向: {trader.side}
-                                            当前网格边界: {trader.grids[trader.current_grid]['lower']} - {trader.grids[trader.current_grid]['upper']}
-                                            """)
-                    else:
-                        current_price = 0
-                    
-                
-                message = "\n".join(status_messages)+f"\n当前账户余额: {balance}\n" + f"\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                
-                mydata = {
-                    'text': '交易状态定时报告',
-                    'desp': message
-                }
-                requests.post(f'https://wx.xtuis.cn/{WX_TOKEN}.send', data=mydata)
-                logger.info('发送微信消息成功')
-            
-            # 休眠到下一个小时
-            next_hour = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-            sleep_seconds = (next_hour - datetime.now()).total_seconds()
-            time.sleep(sleep_seconds)
-            
-        except Exception as e:
-            logger.error(f'发送微信消息失败: {str(e)}')
-            time.sleep(60)  # 发生错误时等待1分钟后重试
-
-
 
 @app.before_request
 def before_req():
@@ -327,10 +300,13 @@ def update_config():
         # 更新 client
         global client
         base_url = 'https://fapi.binance.com' if environment == 'PRD' else 'https://testnet.binancefuture.com'
-        client = Client(api_key, api_secret, base_url=base_url)
+        client = Client(api_key, api_secret, **{'base_url': base_url})
         
         # 测试连接
-        client.account()
+        account_response = client.account()
+        logger.info(account_response)
+        if account_response is None:
+            raise Exception('连接失败')
         
         return jsonify({"status": "success", "message": "配置更新成功"})
     except Exception as e:
@@ -342,6 +318,8 @@ def reset_trading():
     try:
         global trading_pairs
         trading_pairs = {}
+        # 清空JSON文件
+        save_trading_pairs(trading_pairs)
         logger.info('所有交易参数已重置')
         return jsonify({"status": "success", "message": "所有交易参数已重置"})
     except Exception as e:

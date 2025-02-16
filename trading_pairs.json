@@ -1,0 +1,10 @@
+{
+    "BTCUSDT": {
+        "entry_price_percent": 0.05,
+        "entry_usdt": 500.0,
+        "exit_price_percent": 0.001,
+        "open_price": 99818.5,
+        "entry_order_id": 4087683406,
+        "exit_order_id": 4087683398
+    }
+}

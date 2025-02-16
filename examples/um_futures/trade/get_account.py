@@ -14,11 +14,10 @@ test_url = "https://testnet.binancefuture.com"
 um_futures_client = UMFutures(key=key, secret=secret, **{'base_url': test_url})
 logging.info(um_futures_client.account(recvWindow=6000))
 
-
-    
 try:
-    response = um_futures_client.account(recvWindow=6000)
-    logging.info(response['positions'])
+    # response = um_futures_client.account(recvWindow=6000)
+    # logging.info(response['positions'])
+    pass
 except ClientError as error:
     logging.error(
         "Found error. status: {}, error code: {}, error message: {}".format(

@@ -32,6 +32,7 @@ client = Client(
 )
 
 
+
 def prefix_symbol(s: str) -> str:
     # BINANCE:BTCUSDT.P -> BTC-USDT-SWAP
     # 首先处理冒号，如果存在则取后面的部分
@@ -101,6 +102,22 @@ except ClientError as error:
             error.status_code, error.error_code, error.error_message
         )
     )
+
+# 统一设置成单向持仓
+try:
+    change_position_mode_response = client.change_position_mode(dualSidePosition=False)
+    if change_position_mode_response['code'] == 200 or change_position_mode_response['code'] == -4059:
+        # send_wx_notification(f'设置单向持仓成功', f'设置单向持仓成功: {change_position_mode_response}')
+        logger.info(f'设置单向持仓成功: {change_position_mode_response}')
+    else:
+        send_wx_notification(f'设置单向持仓失败', f'设置单向持仓失败，错误: {change_position_mode_response}')
+        logger.error(f'设置单向持仓失败，错误: {change_position_mode_response}')
+except Exception as e:
+    if e.error_code == -4059:
+        logger.info(f'设置单向持仓成功')
+    else:
+        send_wx_notification(f'设置单向持仓失败', f'设置单向持仓失败，错误: {e}')
+        logger.error(f'设置单向持仓失败，错误: {e}')
 
 # 创建全局字典来存储不同币种的交易信息
 trading_pairs = {}
@@ -307,6 +324,22 @@ def update_config():
         logger.info(account_response)
         if account_response is None:
             raise Exception('连接失败')
+        
+        # 统一设置成单向持仓
+        try:
+            change_position_mode_response = client.change_position_mode(dualSidePosition=False)
+            if change_position_mode_response['code'] == 200 or change_position_mode_response['code'] == -4059:
+                # send_wx_notification(f'设置单向持仓成功', f'设置单向持仓成功: {change_position_mode_response}')
+                logger.info(f'设置单向持仓成功: {change_position_mode_response}')
+            else:
+                send_wx_notification(f'设置单向持仓失败', f'设置单向持仓失败，错误: {change_position_mode_response}')
+                logger.error(f'设置单向持仓失败，错误: {change_position_mode_response}')
+        except Exception as e:
+            if e.error_code == -4059:
+                logger.info(f'设置单向持仓成功')
+            else:
+                send_wx_notification(f'设置单向持仓失败', f'设置单向持仓失败，错误: {e}')
+                logger.error(f'设置单向持仓失败，错误: {e}')
         
         return jsonify({"status": "success", "message": "配置更新成功"})
     except Exception as e:

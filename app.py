@@ -192,9 +192,14 @@ def handle_message():
                     # 已经成交的话应该就没仓位了
                     logger.info(f'{symbol} | 上一次的出场单已经成交, orderId: {trading_pairs[symbol]['exit_order_id']}')
                 else:
-                    logger.warning(f'{symbol} | 上一次的出场单未成交,撤掉上一次的出场单')
+                    logger.info(f'{symbol} | 上一次的出场单未成交,撤掉上一次的出场单')
                     # 删除上一次的出场单
-                    client.cancel_order(symbol, trading_pairs[symbol]['exit_order_id'])
+                    cancel_response = client.cancel_order(symbol, trading_pairs[symbol]['exit_order_id'])
+                    if cancel_response['status'] == 'CANCELED':
+                        logger.info(f'{symbol} | 上一次的出场单已撤单')
+                    else:
+                        logger.error(f'{symbol} | 上一次的出场单撤单失败，响应: {cancel_response}')
+                        send_wx_notification(f'{symbol} | 上一次的出场单撤单失败', f'上一次的出场单撤单失败，响应: {cancel_response}')
 
             # 挂个新的出场单
             order_response = client.new_order(
@@ -211,7 +216,7 @@ def handle_message():
                 logger.info(f'{symbol} | 出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
                 send_wx_notification(f'{symbol} | 出场单已创建', f'出场单已创建，ID: {trading_pairs[symbol]["exit_order_id"]}')
             else:
-                logger.error(f'{symbol} | 出场单创建失败，响应: {order_response}')
+                logger.info(f'{symbol} | 出场单创建失败，响应: {order_response}')
                 send_wx_notification(f'{symbol} | 出场单创建失败', f'出场单创建失败，响应: {order_response}')
 
         # 判断之前的限价单是否已经成交，如果没成交，先撤单

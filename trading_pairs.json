@@ -6,5 +6,13 @@
         "open_price": 99818.5,
         "entry_order_id": 4087683406,
         "exit_order_id": 4087683398
+    },
+    "ARKUSDT": {
+        "entry_price_percent": 0.05,
+        "entry_usdt": 500.0,
+        "exit_price_percent": 0.031,
+        "open_price": 0.532,
+        "entry_order_id": 916885,
+        "exit_order_id": null
     }
 }

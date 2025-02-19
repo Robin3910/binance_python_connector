@@ -156,7 +156,7 @@ def handle_message():
         trading_pairs = load_trading_pairs()
         
         data = request.get_json()
-        symbol = data['symbol']
+        symbol = prefix_symbol(data['symbol'])
         entry_price_percent = float(data['entry_price_percent'])
         entry_usdt = float(data['entry_usdt'])
         exit_price_percent = float(data['exit_price_percent'])

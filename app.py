@@ -9,8 +9,6 @@ from logging.handlers import RotatingFileHandler
 from binance.um_futures import UMFutures as Client
 from binance.error import ClientError
 from config import BINANCE_CONFIG, WX_CONFIG
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 import os
 import secrets
 from functools import wraps
@@ -190,15 +188,15 @@ def handle_message():
                 order_response = client.get_open_orders(symbol, trading_pairs[symbol]['exit_order_id'])
                 if order_response['status'] == 'FILLED':
                     # 已经成交的话应该就没仓位了
-                    logger.info(f'{symbol} | 上一次的出场单已经成交, orderId: {trading_pairs[symbol]['exit_order_id']}')
+                    logger.info(f"{symbol} | 上一次的出场单已经成交, orderId: {trading_pairs[symbol]['exit_order_id']}")
                 else:
-                    logger.info(f'{symbol} | 上一次的出场单未成交,撤掉上一次的出场单')
+                    logger.info(f"{symbol} | 上一次的出场单未成交,撤掉上一次的出场单")
                     # 删除上一次的出场单
                     cancel_response = client.cancel_order(symbol, trading_pairs[symbol]['exit_order_id'])
                     if cancel_response['status'] == 'CANCELED':
-                        logger.info(f'{symbol} | 上一次的出场单已撤单')
+                        logger.info(f"{symbol} | 上一次的出场单已撤单")
                     else:
-                        logger.error(f'{symbol} | 上一次的出场单撤单失败，响应: {cancel_response}')
+                        logger.error(f"{symbol} | 上一次的出场单撤单失败，响应: {cancel_response}")
                         send_wx_notification(f'{symbol} | 上一次的出场单撤单失败', f'上一次的出场单撤单失败，响应: {cancel_response}')
 
             # 挂个新的出场单

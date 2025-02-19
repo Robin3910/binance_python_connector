@@ -275,7 +275,7 @@ def before_req():
         if request.json is None:
             return jsonify({'error': '请求体不能为空'}), 400
             
-        if request.remote_addr not in ip_white_list:
+        if request.path != '/update_config' and request.remote_addr not in ip_white_list:
             logger.info(f'ipWhiteList: {ip_white_list}')
             logger.info(f'ip is not in ipWhiteList: {request.remote_addr}')
             return jsonify({'error': 'ip is not in ipWhiteList'}), 403

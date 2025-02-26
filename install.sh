@@ -92,12 +92,6 @@ start_project() {
 main() {
     log_info "开始执行初始化脚本..."
     
-    # 检查是否为root用户
-    if [ "$EUID" -eq 0 ]; then 
-        log_error "请不要使用root用户运行此脚本"
-        exit 1
-    fi
-    
     init_environment
     clone_repository
     switch_branch

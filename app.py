@@ -185,7 +185,7 @@ def handle_message():
         if position_qty != 0:
             # 判断一下上一次的出场单是否已经成交
             if trading_pairs[symbol]['exit_order_id'] is not None:
-                order_response = client.get_open_orders(symbol, trading_pairs[symbol]['exit_order_id'])
+                order_response = client.query_order(symbol, trading_pairs[symbol]['exit_order_id'])
                 if order_response['status'] == 'FILLED':
                     # 已经成交的话应该就没仓位了
                     logger.info(f"{symbol} | 上一次的出场单已经成交, orderId: {trading_pairs[symbol]['exit_order_id']}")
@@ -219,7 +219,7 @@ def handle_message():
 
         # 判断之前的限价单是否已经成交，如果没成交，先撤单
         if trading_pairs[symbol]['entry_order_id'] is not None:
-            order_response = client.get_open_orders(symbol, trading_pairs[symbol]['entry_order_id'])
+            order_response = client.query_order(symbol, trading_pairs[symbol]['entry_order_id'])
             if order_response['status'] == 'FILLED':
                 logger.info(f'{symbol} | 入场单已经成交')
             else:

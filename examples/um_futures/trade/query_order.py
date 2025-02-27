@@ -14,7 +14,7 @@ um_futures_client = UMFutures(key=key, secret=secret, **{'base_url': test_url})
 
 try:
     response = um_futures_client.query_order(
-        symbol="BTCUSDT", orderId=4075360903, recvWindow=2000
+        symbol="BTCUSDT", orderId=4092981306, recvWindow=2000
     )
     logging.info(response)
 except ClientError as error:

@@ -1,18 +1,26 @@
 {
-    "BTCUSDT": {
-        "entry_price_percent": 0.05,
-        "entry_usdt": 500.0,
-        "exit_price_percent": 0.001,
-        "open_price": 99818.5,
-        "entry_order_id": 4087683406,
-        "exit_order_id": 4087683398
-    },
-    "ARKUSDT": {
+    "ETHUSDT": {
         "entry_price_percent": 0.05,
         "entry_usdt": 500.0,
         "exit_price_percent": 0.031,
-        "open_price": 0.532,
-        "entry_order_id": 916885,
+        "open_price": 2700.0,
+        "entry_order_id": 1499214104,
         "exit_order_id": null
+    },
+    "SAFEUSDT": {
+        "entry_price_percent": 0.0015,
+        "entry_usdt": 500.0,
+        "exit_price_percent": 0.001,
+        "open_price": 0.5737,
+        "entry_order_id": 3139,
+        "exit_order_id": null
+    },
+    "BTCUSDT": {
+        "entry_price_percent": 0.0015,
+        "entry_usdt": 500.0,
+        "exit_price_percent": 0.001,
+        "open_price": 88900.0,
+        "entry_order_id": 4092987114,
+        "exit_order_id": 4092986993
     }
 }

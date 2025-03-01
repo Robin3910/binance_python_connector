@@ -101,21 +101,20 @@ except ClientError as error:
         )
     )
 
-# 统一设置成单向持仓
+# 统一设置持仓模式
 try:
-    change_position_mode_response = client.change_position_mode(dualSidePosition=False)
+    change_position_mode_response = client.change_position_mode(dualSidePosition=True)
     if change_position_mode_response['code'] == 200 or change_position_mode_response['code'] == -4059:
-        # send_wx_notification(f'设置单向持仓成功', f'设置单向持仓成功: {change_position_mode_response}')
-        logger.info(f'设置单向持仓成功: {change_position_mode_response}')
+        logger.info(f'设置持仓模式成功: {change_position_mode_response}|是否为单向持仓: {change_position_mode_response["dualSidePosition"] != True}')
     else:
-        send_wx_notification(f'设置单向持仓失败', f'设置单向持仓失败，错误: {change_position_mode_response}')
-        logger.error(f'设置单向持仓失败，错误: {change_position_mode_response}')
+        send_wx_notification(f'设置持仓模式失败', f'设置持仓模式失败，错误: {change_position_mode_response}')
+        logger.error(f'设置持仓模式失败，错误: {change_position_mode_response}')
 except Exception as e:
     if e.error_code == -4059:
-        logger.info(f'设置单向持仓成功')
+        logger.info(f'设置持仓模式成功')
     else:
-        send_wx_notification(f'设置单向持仓失败', f'设置单向持仓失败，错误: {e}')
-        logger.error(f'设置单向持仓失败，错误: {e}')
+        send_wx_notification(f'设置持仓模式失败', f'设置持仓模式失败，错误: {e}')
+        logger.error(f'设置持仓模式失败，错误: {e}')
 
 # 创建全局字典来存储不同币种的交易信息
 trading_pairs = {}
@@ -186,9 +185,9 @@ def handle_message():
             # 判断一下上一次的出场单是否已经成交
             if trading_pairs[symbol]['exit_order_id'] is not None:
                 order_response = client.query_order(symbol, trading_pairs[symbol]['exit_order_id'])
-                if order_response['status'] == 'FILLED':
+                if order_response['status'] == 'FILLED' or order_response['status'] == 'CANCELED':
                     # 已经成交的话应该就没仓位了
-                    logger.info(f"{symbol} | 上一次的出场单已经成交, orderId: {trading_pairs[symbol]['exit_order_id']}")
+                    logger.info(f"{symbol} | 上一次的出场单已经成交or已撤单, orderId: {trading_pairs[symbol]['exit_order_id']}")
                 else:
                     logger.info(f"{symbol} | 上一次的出场单未成交,撤掉上一次的出场单")
                     # 删除上一次的出场单
@@ -204,6 +203,7 @@ def handle_message():
                 symbol=symbol,
                 side="SELL",
                 type="LIMIT",
+                positionSide="LONG",
                 quantity=position_qty,
                 timeInForce="GTC",
                 price=round(open_price * (1-exit_price_percent), symbol_tick_size[symbol]['tick_size'])
@@ -220,8 +220,8 @@ def handle_message():
         # 判断之前的限价单是否已经成交，如果没成交，先撤单
         if trading_pairs[symbol]['entry_order_id'] is not None:
             order_response = client.query_order(symbol, trading_pairs[symbol]['entry_order_id'])
-            if order_response['status'] == 'FILLED':
-                logger.info(f'{symbol} | 入场单已经成交')
+            if order_response['status'] == 'FILLED' or order_response['status'] == 'CANCELED':
+                logger.info(f'{symbol} | 入场单已经成交or已撤单')
             else:
                 logger.info(f'{symbol} | 入场单未成交,撤掉入场单')
                 cancel_response = client.cancel_order(symbol, trading_pairs[symbol]['entry_order_id'])
@@ -238,6 +238,7 @@ def handle_message():
             symbol=symbol,
             side="BUY",
             type="LIMIT",
+            positionSide="LONG",
             quantity=qty,
             timeInForce="GTC",
             price=round(open_price * (1-entry_price_percent), symbol_tick_size[symbol]['tick_size'])

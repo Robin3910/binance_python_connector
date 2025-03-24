@@ -510,6 +510,7 @@ def stop_profit_position():
         return jsonify({"status": "error", "message": "无任何仓位"})
     except Exception as e:
         logger.error(f"止盈持仓失败: {str(e)}")
+        return jsonify({"status": "error", "message": f"止盈持仓失败{str(e)}"})
 
 
 if __name__ == "__main__":

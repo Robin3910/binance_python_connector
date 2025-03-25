@@ -9,7 +9,7 @@ from logging.handlers import RotatingFileHandler
 from binance.um_futures import UMFutures as Client
 from binance.cm_futures import CMFutures as CM_Client
 from binance.error import ClientError
-from config import BINANCE_CONFIG, WX_CONFIG, BINANCE_CM_CONFIG
+from config import BINANCE_CONFIG, WX_CONFIG
 import os
 import secrets
 from functools import wraps
@@ -23,19 +23,19 @@ ip_white_list = BINANCE_CONFIG["ip_white_list"]
 
 # 添加 Flask secret key
 app.secret_key = secrets.token_hex(16)
-
+# UM客户端
 client = Client(
     BINANCE_CONFIG["key"], BINANCE_CONFIG["secret"], base_url=BINANCE_CONFIG["base_url"]
 )
 # CM客户端
 cm_client = CM_Client(
-    BINANCE_CM_CONFIG["key"],
-    BINANCE_CM_CONFIG["secret"],
-    base_url=BINANCE_CM_CONFIG["base_url"],
+    BINANCE_CONFIG["key"],
+    BINANCE_CONFIG["secret"],
+    base_url=BINANCE_CONFIG["cm_base_url"],
 )
 
 
-def prefix_symbol(s: str) -> str:
+def prefix_symbol(s: str, type: str = "um") -> str:
     # BINANCE:BTCUSDT.P -> BTC-USDT-SWAP
     # 首先处理冒号，如果存在则取后面的部分
     if ":" in s:
@@ -44,6 +44,10 @@ def prefix_symbol(s: str) -> str:
     # 检查字符串是否以".P"结尾并移除
     if s.endswith(".P"):
         s = s[:-2]
+
+    if type == "cm":
+        s = s.replace("USDT", "USD")
+        s += "_PERP"
 
     return s
 
@@ -111,6 +115,7 @@ except ClientError as error:
 # 统一设置持仓模式
 try:
     change_position_mode_response = client.change_position_mode(dualSidePosition=True)
+    cm_change_position_mode_response = cm_client.change_position_mode(dualSidePosition=True)
     if (
         change_position_mode_response["code"] == 200
         or change_position_mode_response["code"] == -4059
@@ -462,14 +467,17 @@ def reset_trading():
         return jsonify({"status": "error", "message": str(e)})
 
 
+# {
+#     "symbol": "BTCUSDT.P", # 
+#     "type": "um", # um=U本位 cm=币本位
+# }
 # 市价止盈持仓
-@app.route("/stop_profit_position", methods=["POST"])
-@login_required
+@app.route("/order", methods=["POST"])
 def stop_profit_position():
     # 接受Post 请求参数
     data = request.get_json()
-    symbol = prefix_symbol(data["symbol"])
     client_type= data["type"]
+    symbol = prefix_symbol(data["symbol"], client_type)
     # 获取当前client um=U本位 cm=币本位
     current_client = client if client_type == "um" else cm_client
     try:
@@ -485,6 +493,7 @@ def stop_profit_position():
                         symbol=position["symbol"],
                         side="BUY",
                         type="MARKET",
+                        reduceOnly="true",
                         quantity=abs(float(position["positionAmt"])),
                         recvWindow=8000,
                     )
@@ -494,6 +503,7 @@ def stop_profit_position():
                         symbol=position["symbol"],
                         side="SELL",
                         type="MARKET",
+                        reduceOnly="true",
                         quantity=abs(float(position["positionAmt"])),
                         recvWindow=8000,
                     )

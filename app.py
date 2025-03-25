@@ -468,17 +468,20 @@ def reset_trading():
 def stop_profit_position():
     # 接受Post 请求参数
     data = request.get_json()
-    symbol = data["symbol"]
+    symbol = prefix_symbol(data["symbol"])
+    client_type= data["type"]
+    # 获取当前client um=U本位 cm=币本位
+    current_client = client if client_type == "um" else cm_client
     try:
         # 查询用户持仓信息
-        position_response = cm_client.account(recvWindow=6000)
+        position_response = current_client.account(recvWindow=6000)
         for position in position_response["positions"]:
             # 判断是否存在对应symbol的持仓信息
             if position["symbol"] == symbol and position["positionAmt"] != "0":
                 order_response = None
                 # 看空市价平仓
                 if float(position["positionAmt"]) < 0:
-                    order_response = cm_client.new_order(
+                    order_response = current_client.new_order(
                         symbol=position["symbol"],
                         side="BUY",
                         type="MARKET",
@@ -487,7 +490,7 @@ def stop_profit_position():
                     )
                 # 看多市价平仓
                 if float(position["positionAmt"]) > 0:
-                    order_response = cm_client.new_order(
+                    order_response = current_client.new_order(
                         symbol=position["symbol"],
                         side="SELL",
                         type="MARKET",
